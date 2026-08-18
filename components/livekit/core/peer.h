@@ -53,6 +53,17 @@ typedef struct {
     /// Weather to force the use of relay ICE candidates.
     bool force_relay;
 
+    /// Whether this connection carries data channels.
+    ///
+    /// Data channels live on the publisher connection, and additionally on the
+    /// subscriber connection when the session is subscriber primary. Enabling
+    /// them on a connection that negotiates none leaves SCTP retrying INIT
+    /// against a peer that has no SCTP endpoint, and keeps that connection from
+    /// ever reporting itself connected: a connection carrying data channels is
+    /// only connected once they open.
+    ///
+    bool enable_data_channel;
+
     /// Media options used for creating SDP messages.
     engine_media_options_t* media;
 

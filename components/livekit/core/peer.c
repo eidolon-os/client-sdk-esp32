@@ -118,6 +118,17 @@ static int on_state(esp_peer_state_t rtc_state, void *ctx)
         case ESP_PEER_STATE_PAIRING:
             new_state = CONNECTION_STATE_CONNECTING;
             break;
+        case ESP_PEER_STATE_CONNECTED:
+            // A connection carrying no data channels is connected as soon as the
+            // transport is up; one that carries them waits for them to open below.
+            if (!peer->options.enable_data_channel) {
+                new_state = CONNECTION_STATE_CONNECTED;
+#if CONFIG_LK_BENCHMARK
+                ESP_LOGI(TAG(peer), "[BENCH] Connected in %" PRIu64 "ms",
+                    get_unix_time_ms() - peer->start_time);
+#endif
+            }
+            break;
         case ESP_PEER_STATE_DATA_CHANNEL_CONNECTED:
             if (peer->options.role == PEER_ROLE_PUBLISHER) {
                 create_data_channels(peer);
@@ -306,7 +317,7 @@ peer_err_t peer_create(peer_handle_t *handle, peer_options_t *options)
         .video_dir = video_dir,
         .audio_info = options->media->audio_info,
         .video_info = options->media->video_info,
-        .enable_data_channel = true,
+        .enable_data_channel = peer->options.enable_data_channel,
         .manual_ch_create = true,
         .no_auto_reconnect = false,
         .extra_cfg = &default_peer_cfg,
