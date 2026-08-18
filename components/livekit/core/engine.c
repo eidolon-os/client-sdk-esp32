@@ -93,10 +93,21 @@ typedef struct {
     } detail;
 } engine_event_t;
 
+/// Maximum length of a track SID, which is longer than a participant SID.
+#define MAX_TRACK_SID_LEN 32
+
 typedef struct {
     bool is_subscriber_primary;
     livekit_pb_sid_t local_participant_sid;
-    livekit_pb_sid_t sub_audio_track_sid;
+
+    /// The remote audio track this connection is subscribed to, and the participant
+    /// publishing it. Both are empty while the subscription slot is free.
+    ///
+    /// The publisher is recorded alongside the track because a track only ever
+    /// goes away through an update about the participant that published it.
+    ///
+    char sub_audio_track_sid[MAX_TRACK_SID_LEN];
+    livekit_pb_sid_t sub_audio_pub_sid;
 } session_state_t;
 
 typedef struct {
@@ -153,23 +164,67 @@ static inline void convert_dec_aud_info(esp_peer_audio_stream_info_t *info, av_r
     dec_info->bits_per_sample = 16;
 }
 
-static engine_err_t subscribe_tracks(engine_t *eng, livekit_pb_track_info_t *tracks, int count)
+/// Returns whether the participant is the one publishing the subscribed audio track.
+static bool is_sub_audio_publisher(const engine_t *eng, const livekit_pb_participant_info_t *participant)
 {
-    if (tracks == NULL || count <= 0) {
+    return eng->session.sub_audio_track_sid[0] != '\0' &&
+           strncmp(participant->sid,
+                   eng->session.sub_audio_pub_sid,
+                   sizeof(eng->session.sub_audio_pub_sid)) == 0;
+}
+
+/// Returns whether the participant still publishes the subscribed audio track.
+static bool publishes_sub_audio_track(const engine_t *eng, const livekit_pb_participant_info_t *participant)
+{
+    for (pb_size_t i = 0; i < participant->tracks_count; i++) {
+        const char *sid = participant->tracks[i].sid;
+        if (sid != NULL &&
+            strncmp(sid,
+                    eng->session.sub_audio_track_sid,
+                    sizeof(eng->session.sub_audio_track_sid)) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Frees the subscription slot so that a later track can take it.
+static void release_sub_audio_track(engine_t *eng, const char *reason)
+{
+    if (eng->session.sub_audio_track_sid[0] == '\0') {
+        return;
+    }
+    ESP_LOGI(TAG, "Releasing audio track subscription: sid=%s (%s)",
+        eng->session.sub_audio_track_sid, reason);
+    eng->session.sub_audio_track_sid[0] = '\0';
+    eng->session.sub_audio_pub_sid[0] = '\0';
+}
+
+static engine_err_t subscribe_tracks(engine_t *eng, const livekit_pb_participant_info_t *participant)
+{
+    if (participant == NULL) {
         return ENGINE_ERR_INVALID_ARG;
+    }
+    if (participant->state == LIVEKIT_PB_PARTICIPANT_INFO_STATE_DISCONNECTED) {
+        // A participant on its way out publishes nothing worth subscribing to.
+        return ENGINE_ERR_NONE;
+    }
+    if (participant->tracks == NULL || participant->tracks_count == 0) {
+        return ENGINE_ERR_NONE;
     }
     if (eng->session.sub_audio_track_sid[0] != '\0') {
         return ENGINE_ERR_MAX_SUB;
     }
-    for (int i = 0; i < count; i++) {
-        livekit_pb_track_info_t *track = &tracks[i];
-        if (track->type != LIVEKIT_PB_TRACK_TYPE_AUDIO) {
+    for (pb_size_t i = 0; i < participant->tracks_count; i++) {
+        const livekit_pb_track_info_t *track = &participant->tracks[i];
+        if (track->type != LIVEKIT_PB_TRACK_TYPE_AUDIO || track->sid == NULL) {
             continue;
         }
         // For now, subscribe to the first audio track.
         ESP_LOGI(TAG, "Subscribing to audio track: sid=%s", track->sid);
         signal_send_update_subscription(eng->signal_handle, track->sid, true);
         strlcpy(eng->session.sub_audio_track_sid, track->sid, sizeof(eng->session.sub_audio_track_sid));
+        strlcpy(eng->session.sub_audio_pub_sid, participant->sid, sizeof(eng->session.sub_audio_pub_sid));
         break;
     }
     return ENGINE_ERR_NONE;
@@ -698,11 +753,7 @@ static bool handle_join(engine_t *eng, const livekit_pb_join_response_t *join)
 
     // 6. Subscribe to remote tracks that have already been published.
     for (pb_size_t i = 0; i < join->other_participants_count; i++) {
-        engine_err_t ret = subscribe_tracks(
-            eng,
-            join->other_participants[i].tracks,
-            join->other_participants[i].tracks_count
-        );
+        engine_err_t ret = subscribe_tracks(eng, &join->other_participants[i]);
         if (ret == ENGINE_ERR_MAX_SUB) break;
     }
     return true;
@@ -729,6 +780,21 @@ static void handle_room_update(engine_t *eng, const livekit_pb_room_update_t *ro
 
 static void handle_participant_update(engine_t *eng, const livekit_pb_participant_update_t *update)
 {
+    // Release the subscription slot before filling it, so that an update carrying
+    // both a departing publisher and its replacement is handled whatever order the
+    // two participants appear in.
+    for (pb_size_t i = 0; i < update->participants_count; i++) {
+        const livekit_pb_participant_info_t *participant = &update->participants[i];
+        if (!is_sub_audio_publisher(eng, participant)) {
+            continue;
+        }
+        if (participant->state == LIVEKIT_PB_PARTICIPANT_INFO_STATE_DISCONNECTED) {
+            release_sub_audio_track(eng, "publisher disconnected");
+        } else if (!publishes_sub_audio_track(eng, participant)) {
+            release_sub_audio_track(eng, "track unpublished");
+        }
+    }
+
     bool found_local = false;
     for (pb_size_t i = 0; i < update->participants_count; i++) {
         const livekit_pb_participant_info_t *participant = &update->participants[i];
@@ -740,7 +806,7 @@ static void handle_participant_update(engine_t *eng, const livekit_pb_participan
         if (is_local) {
             found_local = true;
         } else {
-            subscribe_tracks(eng, participant->tracks, participant->tracks_count);
+            subscribe_tracks(eng, participant);
         }
         if (eng->options.on_participant_info) {
             eng->options.on_participant_info(participant, is_local, eng->options.ctx);
