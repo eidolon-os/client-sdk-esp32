@@ -575,16 +575,19 @@ static bool establish_peer_connections(engine_t *eng, const livekit_pb_join_resp
         .ctx              = eng
     };
 
-    // 1. Publisher
-    options.role          = PEER_ROLE_PUBLISHER;
+    // 1. Publisher: always carries the data channels this client creates.
+    options.role                = PEER_ROLE_PUBLISHER;
+    options.enable_data_channel = true;
     _create_and_connect_peer(&options, &eng->pub_peer_handle);
     if (eng->pub_peer_handle == NULL)
         return false;
 
-    // 2. Subscriber
-    options.role           = PEER_ROLE_SUBSCRIBER;
-    options.on_audio_info  = on_peer_sub_audio_info;
-    options.on_audio_frame = on_peer_sub_audio_frame;
+    // 2. Subscriber: carries data channels only when the server creates them
+    // there, which it does for a subscriber primary session and no other.
+    options.role                = PEER_ROLE_SUBSCRIBER;
+    options.enable_data_channel = eng->session.is_subscriber_primary;
+    options.on_audio_info       = on_peer_sub_audio_info;
+    options.on_audio_frame      = on_peer_sub_audio_frame;
 
     _create_and_connect_peer(&options, &eng->sub_peer_handle);
     if (eng->sub_peer_handle == NULL) {
