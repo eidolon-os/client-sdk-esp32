@@ -86,3 +86,47 @@ TEST_CASE("initialize", "[basic]")
     res = livekit_room_destroy(room_handle);
     TEST_ASSERT_EQUAL_MESSAGE(LIVEKIT_ERR_NONE, res, "Failed to destroy room");
 }
+
+TEST_CASE("data-only rooms need no media devices", "[basic]")
+{
+    const livekit_room_options_t options = {0};
+    for (int cycle = 0; cycle < 10; ++cycle) {
+        livekit_room_handle_t room = NULL;
+        TEST_ASSERT_EQUAL(LIVEKIT_ERR_NONE, livekit_room_create(&room, &options));
+        TEST_ASSERT_NOT_NULL(room);
+        TEST_ASSERT_EQUAL(LIVEKIT_ERR_NONE, livekit_room_destroy(room));
+    }
+}
+
+TEST_CASE("subscriber-only rooms need no capturer", "[basic]")
+{
+    const livekit_room_options_t options = {
+        .subscribe = {
+            .kind = LIVEKIT_MEDIA_TYPE_AUDIO,
+            .renderer = media_get_renderer(),
+        },
+    };
+    for (int cycle = 0; cycle < 10; ++cycle) {
+        livekit_room_handle_t room = NULL;
+        TEST_ASSERT_EQUAL(LIVEKIT_ERR_NONE, livekit_room_create(&room, &options));
+        TEST_ASSERT_NOT_NULL(room);
+        TEST_ASSERT_EQUAL(LIVEKIT_ERR_NONE, livekit_room_destroy(room));
+    }
+}
+
+TEST_CASE("audio publication still requires a capturer", "[basic]")
+{
+    const livekit_room_options_t options = {
+        .publish = {
+            .kind = LIVEKIT_MEDIA_TYPE_AUDIO,
+            .audio_encode = {
+                .codec = LIVEKIT_AUDIO_CODEC_OPUS,
+                .sample_rate = 16000,
+                .channel_count = 1,
+            },
+        },
+    };
+    livekit_room_handle_t room = NULL;
+    TEST_ASSERT_EQUAL(LIVEKIT_ERR_INVALID_ARG, livekit_room_create(&room, &options));
+    TEST_ASSERT_NULL(room);
+}
