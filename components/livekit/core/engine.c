@@ -330,8 +330,17 @@ static void media_stream_task(void *arg)
     media_lib_thread_destroy(NULL);
 }
 
+static bool publishes_media(const engine_t *eng)
+{
+    return eng->options.media.audio_info.codec != ESP_PEER_AUDIO_CODEC_NONE ||
+           eng->options.media.video_info.codec != ESP_PEER_VIDEO_CODEC_NONE;
+}
+
 static engine_err_t media_stream_begin(engine_t *eng)
 {
+    if (!publishes_media(eng)) {
+        return ENGINE_ERR_NONE;
+    }
     if (esp_capture_start(eng->options.media.capturer) != ESP_CAPTURE_ERR_OK) {
         ESP_LOGE(TAG, "Failed to start capture");
         return ENGINE_ERR_MEDIA;
@@ -1244,7 +1253,7 @@ engine_handle_t engine_init(const engine_options_t *options)
     }
     eng->renderer_handle = options->media.renderer;
 
-    if (enable_capture_sink(eng) != ENGINE_ERR_NONE) {
+    if (publishes_media(eng) && enable_capture_sink(eng) != ENGINE_ERR_NONE) {
         goto _init_failed;
     }
     return eng;
