@@ -1063,6 +1063,16 @@ static bool handle_state_backoff(engine_t *eng, const engine_event_t *ev)
 
             timer_start(eng, backoff_ms);
             break;
+        case EV_CMD_CLOSE:
+            // Closing a visit must win over an already scheduled reconnect.
+            eng->state = ENGINE_STATE_DISCONNECTED;
+            break;
+        case EV_SIG_RES:
+            if (ev->detail.res.which_message == LIVEKIT_PB_SIGNAL_RESPONSE_LEAVE_TAG) {
+                eng->failure_reason = map_disconnect_reason(ev->detail.res.message.leave.reason);
+                eng->state = ENGINE_STATE_DISCONNECTED;
+            }
+            break;
         case EV_MAX_RETRIES_REACHED:
             eng->failure_reason = LIVEKIT_FAILURE_REASON_MAX_RETRIES;
             eng->state = ENGINE_STATE_DISCONNECTED;
@@ -1121,9 +1131,10 @@ static void engine_task(void *arg)
         if (eng->state != state) {
             ESP_LOGD(TAG, "State changed: %d -> %d", state, eng->state);
 
-            state = eng->state;
+            const engine_state_t next_state = eng->state;
             handle_state(eng, &(engine_event_t){ .type = _EV_STATE_EXIT }, state);
-            assert(eng->state == state);
+            assert(eng->state == next_state);
+            state = next_state;
             handle_state(eng, &(engine_event_t){ .type = _EV_STATE_ENTER }, eng->state);
             assert(eng->state == state);
 
