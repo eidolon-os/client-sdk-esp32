@@ -461,25 +461,11 @@ static void on_peer_state_changed(connection_state_t state, peer_role_t role, vo
 static void on_peer_sdp(const char *sdp, peer_role_t role, void *ctx)
 {
     engine_t *eng = (engine_t *)ctx;
-    if (sdp == NULL || sdp[0] == '\0') {
-        ESP_LOGE(TAG, "LK_SDP_EMPTY stage=generated role=%d", role);
-        return;
-    }
     engine_event_t ev = {
         .type = EV_PEER_SDP,
         .detail.peer_sdp = { .sdp = strdup(sdp), .role = role }
     };
-    if (ev.detail.peer_sdp.sdp == NULL) {
-        ESP_LOGE(TAG, "LK_SDP_NO_MEMORY stage=copy role=%d", role);
-        return;
-    }
-    // The queue owns the copy only after a successful enqueue.
-    if (!event_enqueue(eng, &ev, false)) {
-        free(ev.detail.peer_sdp.sdp);
-        ESP_LOGE(TAG, "LK_SDP_QUEUE_FULL stage=enqueue role=%d", role);
-        return;
-    }
-    ESP_LOGI(TAG, "LK_SDP_QUEUED role=%d bytes=%u", role, (unsigned)strlen(sdp));
+    event_enqueue(eng, &ev, false);
 }
 
 
@@ -864,39 +850,6 @@ static bool handle_state_disconnected(engine_t *eng, const engine_event_t *ev)
     return false;
 }
 
-// Both initial negotiation and renegotiation use the same failure semantics.
-// Called only on the engine task; callback tasks must not mutate engine state.
-static void handle_remote_sdp(engine_t *eng, peer_role_t role, const char *sdp)
-{
-    ESP_LOGI(TAG, "LK_SDP_RECEIVED role=%d state=%d bytes=%u", role, eng->state,
-             sdp == NULL ? 0 : (unsigned)strlen(sdp));
-    peer_handle_t peer = role == PEER_ROLE_PUBLISHER ? eng->pub_peer_handle : eng->sub_peer_handle;
-    peer_err_t err = peer_handle_sdp(peer, sdp);
-    if (err != PEER_ERR_NONE) {
-        ESP_LOGE(TAG, "LK_SDP_APPLY_FAILED role=%d state=%d err=%d", role, eng->state, err);
-        eng->failure_reason = LIVEKIT_FAILURE_REASON_RTC;
-        eng->state = ENGINE_STATE_BACKOFF;
-        return;
-    }
-    // Acceptance by esp_peer is not proof that an Answer was generated.
-    ESP_LOGI(TAG, "LK_SDP_ACCEPTED role=%d", role);
-}
-
-static void send_local_sdp(engine_t *eng, peer_role_t role, const char *sdp)
-{
-    signal_err_t err = role == PEER_ROLE_PUBLISHER ?
-        signal_send_offer(eng->signal_handle, sdp) : signal_send_answer(eng->signal_handle, sdp);
-    if (err != SIGNAL_ERR_NONE) {
-        ESP_LOGE(TAG, "LK_SDP_SEND_FAILED role=%d state=%d err=%d", role, eng->state, err);
-        // A failed send may also be an allocation/encoding error, not a closed socket.
-        eng->failure_reason = LIVEKIT_FAILURE_REASON_OTHER;
-        eng->state = ENGINE_STATE_BACKOFF;
-        return;
-    }
-    // Local send success does not acknowledge server receipt or application.
-    ESP_LOGI(TAG, "LK_SDP_SENT role=%d bytes=%u", role, (unsigned)strlen(sdp));
-}
-
 // MARK: - State: Connecting
 
 /// Handler for `ENGINE_STATE_CONNECTING`.
@@ -937,11 +890,11 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
-                    handle_remote_sdp(eng, PEER_ROLE_PUBLISHER, answer->sdp);
+                    peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
-                    handle_remote_sdp(eng, PEER_ROLE_SUBSCRIBER, offer->sdp);
+                    peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
                     const livekit_pb_trickle_request_t *trickle = &res->message.trickle;
@@ -987,7 +940,11 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
         case EV_PEER_SDP:
             const char *sdp = ev->detail.peer_sdp.sdp;
             peer_role_t sdp_role = ev->detail.peer_sdp.role;
-            send_local_sdp(eng, sdp_role, sdp);
+            if (sdp_role == PEER_ROLE_PUBLISHER) {
+                signal_send_offer(eng->signal_handle, sdp);
+            } else {
+                signal_send_answer(eng->signal_handle, sdp);
+            }
             break;
         default:
             break;
@@ -1031,11 +988,11 @@ static bool handle_state_connected(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
-                    handle_remote_sdp(eng, PEER_ROLE_PUBLISHER, answer->sdp);
+                    peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
-                    handle_remote_sdp(eng, PEER_ROLE_SUBSCRIBER, offer->sdp);
+                    peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
                     const livekit_pb_trickle_request_t *trickle = &res->message.trickle;
@@ -1077,7 +1034,7 @@ static bool handle_state_connected(engine_t *eng, const engine_event_t *ev)
                 ESP_LOGW(TAG, "Unexpected SDP from publisher");
                 break;
             }
-            send_local_sdp(eng, sdp_role, sdp);
+            signal_send_answer(eng->signal_handle, sdp);
             break;
         default:
             break;
@@ -1105,16 +1062,6 @@ static bool handle_state_backoff(engine_t *eng, const engine_event_t *ev)
                 backoff_ms, eng->retry_count, CONFIG_LK_MAX_RETRIES, eng->failure_reason);
 
             timer_start(eng, backoff_ms);
-            break;
-        case EV_CMD_CLOSE:
-            // Closing a visit must win over an already scheduled reconnect.
-            eng->state = ENGINE_STATE_DISCONNECTED;
-            break;
-        case EV_SIG_RES:
-            if (ev->detail.res.which_message == LIVEKIT_PB_SIGNAL_RESPONSE_LEAVE_TAG) {
-                eng->failure_reason = map_disconnect_reason(ev->detail.res.message.leave.reason);
-                eng->state = ENGINE_STATE_DISCONNECTED;
-            }
             break;
         case EV_MAX_RETRIES_REACHED:
             eng->failure_reason = LIVEKIT_FAILURE_REASON_MAX_RETRIES;
@@ -1174,10 +1121,9 @@ static void engine_task(void *arg)
         if (eng->state != state) {
             ESP_LOGD(TAG, "State changed: %d -> %d", state, eng->state);
 
-            const engine_state_t next_state = eng->state;
+            state = eng->state;
             handle_state(eng, &(engine_event_t){ .type = _EV_STATE_EXIT }, state);
-            assert(eng->state == next_state);
-            state = next_state;
+            assert(eng->state == state);
             handle_state(eng, &(engine_event_t){ .type = _EV_STATE_ENTER }, eng->state);
             assert(eng->state == state);
 

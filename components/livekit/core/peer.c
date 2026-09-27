@@ -160,9 +160,9 @@ static int on_msg(esp_peer_msg_t *info, void *ctx)
     peer_t *peer = (peer_t *)ctx;
     switch (info->type) {
         case ESP_PEER_MSG_TYPE_SDP:
-            ESP_LOGI(TAG(peer), "LK_SDP_GENERATED type=%s bytes=%d",
+            ESP_LOGI(TAG(peer), "Generated %s:\n%s",
                 peer->options.role == PEER_ROLE_PUBLISHER ? "offer" : "answer",
-                (int)info->size);
+                (char *)info->data);
             peer->options.on_sdp((char *)info->data, peer->options.role, peer->options.ctx);
             break;
         default:
@@ -424,9 +424,8 @@ peer_err_t peer_handle_sdp(peer_handle_t handle, const char *sdp)
         .data = (void *)sdp,
         .size = (int)strlen(sdp)
     };
-    int err = esp_peer_send_msg(peer->connection, &msg);
-    if (err != ESP_PEER_ERR_NONE) {
-        ESP_LOGE(TAG(peer), "LK_SDP_PEER_REJECTED role=%d err=%d", peer->options.role, err);
+    if (esp_peer_send_msg(peer->connection, &msg) != ESP_PEER_ERR_NONE) {
+        ESP_LOGE(TAG(peer), "Failed to handle answer");
         return PEER_ERR_RTC;
     }
     return PEER_ERR_NONE;
