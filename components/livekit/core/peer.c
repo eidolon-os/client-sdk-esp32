@@ -22,6 +22,7 @@
 #include "utils.h"
 
 #include "peer.h"
+#include "ice_candidate_transport.h"
 
 static const char *SUB_TAG = "livekit_peer.sub";
 static const char *PUB_TAG = "livekit_peer.pub";
@@ -42,6 +43,7 @@ typedef struct {
     esp_peer_handle_t connection;
 
     connection_state_t state;
+    bool tcp_support;
 
     bool running;
     bool pause;
@@ -302,8 +304,10 @@ peer_err_t peer_create(peer_handle_t *handle, peer_options_t *options)
             .cache_timeout = 5000,
             .send_cache_size = 100 * 1024,
             .recv_cache_size = 100 * 1024
-        }
+        },
+        .tcp_support = false
     };
+    peer->tcp_support = default_peer_cfg.tcp_support;
     esp_peer_media_dir_t audio_dir = get_media_direction(options->media->audio_dir, peer->options.role);
     esp_peer_media_dir_t video_dir = get_media_direction(options->media->video_dir, peer->options.role);
     ESP_LOGD(TAG(peer), "Audio dir: %d, Video dir: %d", audio_dir, video_dir);
@@ -437,6 +441,16 @@ peer_err_t peer_handle_ice_candidate(peer_handle_t handle, const char *candidate
         return PEER_ERR_INVALID_ARG;
     }
     peer_t *peer = (peer_t *)handle;
+
+    // With TCP disabled, esp_peer 1.5.6 can emit CONNECT_FAILED when a
+    // TCP candidate arrives before UDP. A later UDP candidate resumes pairing,
+    // but the engine has already queued the failure and tears down the peer.
+    // Do not offer a transport this peer was not configured to use. This keeps
+    // UDP behavior unchanged and avoids timing/grace-period workarounds.
+    if (!peer->tcp_support && ice_candidate_uses_tcp(candidate)) {
+        ESP_LOGI(TAG(peer), "Ignoring TCP ICE candidate: TCP transport disabled");
+        return PEER_ERR_NONE;
+    }
 
     esp_peer_msg_t msg = {
         .type = ESP_PEER_MSG_TYPE_CANDIDATE,
