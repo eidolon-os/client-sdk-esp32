@@ -31,3 +31,11 @@
 `python3 -m unittest discover -s tests -v` 的 2 项既有生命周期测试通过。`git diff --exit-code backup/eidolon-dev-before-20260928-rebase eidolon_dev -- components/livekit/core/engine.c components/livekit/core/peer.c` 通过。本地尚未在新 `esp_peer`/WebSocket/nanopb 组合上构建固件，也未刷机或做协商/音频回归。主线三项续聊验收继续使用已验证旧 SDK。
 
 推送初版 rebase 结果时，GitHub 拒绝更新 `.github/workflows/ci.yml`：现有 OAuth token 缺少 `workflow` scope。用户已授权刷新 scope，设备授权尚待完成。远端 `eidolon_dev` 暂停在已安全回退的 `13c780d`。权限完成后应先确认远端仍为 `13c780d`，再用显式 `--force-with-lease` 推送清理后的本地 rebase；不删除上游 CI 文件绕过权限。推送后再安排新依赖的独立构建与设备验证，验证通过前不改现役固件 pin。
+
+## 2026-09-30 推送与同步方式
+
+- upstream/main 仍是 `fbf09ed`（v0.3.11），无新提交。
+- `eidolon_dev` 是线性历史：`upstream/main` 之上依次是上文 7 个提交、本文，以及 `51ae445`（`8fa3491` 的 cherry-pick：不发布媒体的房间不再建立采集 sink）。`8fa3491` 此前只在 `audio-capture-scheduling` / `fix/optional-media-capture`，现已并入；Eidolon 的运行代码改动不再留在其他分支上。
+- 远端 `eidolon_dev` 以 `--force-with-lease` 替换为该线性历史（此前远端依次为 `13c780d`、以及 2026-09-30 一度推送的 `44b4f85`）。旧提交仍经 `origin/main`、`origin/codex/shared-session-lifecycle` 可达，固件曾钉的 `3396a5d` 不会失效。
+- 固件的 SDK pin 跟随 `eidolon_dev` 的最新提交。换 pin 后编译通过不等于验收：新依赖（esp_peer 1.5.x、esp_websocket_client 1.8、nanopb 0.4.9）下的连接、协商与音频需在设备上回归。
+- 以后与 upstream 同步：`git rebase upstream/main eidolon_dev`，用 `git range-diff` 核对每个 Eidolon 补丁的重放结果，确认远端仍是上次推送的提交后 `git push --force-with-lease=eidolon_dev:<上次提交> origin eidolon_dev`，再把固件 pin 移到新顶端并做设备回归。不向 upstream 推送。
