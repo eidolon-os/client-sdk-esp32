@@ -338,6 +338,18 @@ peer_err_t peer_create(peer_handle_t *handle, peer_options_t *options)
         .role = peer->ice_role,
         .ctx = peer
     };
+    // Receive-only rooms have no publishing codec in engine media options.
+    // Supply the subscriber's Opus receive capability without changing the
+    // shared publish format (which must remain NONE and allocate no capture).
+    // Actual incoming stream parameters are delivered by on_audio_info.
+    if (audio_dir == ESP_PEER_MEDIA_DIR_RECV_ONLY &&
+        peer_cfg.audio_info.codec == ESP_PEER_AUDIO_CODEC_NONE) {
+        peer_cfg.audio_info = (esp_peer_audio_stream_info_t) {
+            .codec = ESP_PEER_AUDIO_CODEC_OPUS,
+            .sample_rate = 48000,
+            .channel = 1
+        };
+    }
     if (esp_peer_open(&peer_cfg, esp_peer_get_default_impl(), &peer->connection) != ESP_PEER_ERR_NONE) {
         ESP_LOGE(TAG(peer), "Failed to open peer");
         media_lib_event_group_destroy(peer->wait_event);
