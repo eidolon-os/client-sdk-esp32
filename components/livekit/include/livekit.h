@@ -185,14 +185,6 @@ typedef struct {
     livekit_participant_kind_t kind;
     /// The current state of the participant.
     livekit_participant_state_t state;
-    /// Whether this update describes this room's local participant.
-    bool is_local;
-    /// Current server permission to publish tracks (source limits may narrow it).
-    bool can_publish;
-    /// Current server permission to subscribe to tracks.
-    bool can_subscribe;
-    /// Current server permission to publish data.
-    bool can_publish_data;
 } livekit_participant_info_t;
 
 /// Options for creating a room.
