@@ -187,6 +187,10 @@ static void on_eng_participant_info(const livekit_pb_participant_info_t* info, b
         // Assumes enum values are the same as defined in the protocol.
         .kind = (livekit_participant_kind_t)info->kind,
         .state = (livekit_participant_state_t)info->state,
+        .is_local = is_local,
+        .can_publish = info->permission.can_publish,
+        .can_subscribe = info->permission.can_subscribe,
+        .can_publish_data = info->permission.can_publish_data,
     };
     room->options.on_participant_info(&participant_info, room->options.ctx);
 }
