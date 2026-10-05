@@ -44,6 +44,7 @@ typedef struct {
 
     connection_state_t state;
     bool tcp_support;
+    bool ipv6_support;
 
     bool running;
     bool pause;
@@ -308,6 +309,7 @@ peer_err_t peer_create(peer_handle_t *handle, peer_options_t *options)
         .tcp_support = false
     };
     peer->tcp_support = default_peer_cfg.tcp_support;
+    peer->ipv6_support = default_peer_cfg.ipv6_support;
     esp_peer_media_dir_t audio_dir = get_media_direction(options->media->audio_dir, peer->options.role);
     esp_peer_media_dir_t video_dir = get_media_direction(options->media->video_dir, peer->options.role);
     ESP_LOGD(TAG(peer), "Audio dir: %d, Video dir: %d", audio_dir, video_dir);
@@ -463,6 +465,11 @@ peer_err_t peer_handle_ice_candidate(peer_handle_t handle, const char *candidate
         ESP_LOGI(TAG(peer), "Ignoring TCP ICE candidate: TCP transport disabled");
         return PEER_ERR_NONE;
     }
+    if (!peer->ipv6_support && ice_candidate_uses_ipv6(candidate)) {
+        ESP_LOGI(TAG(peer), "Ignoring IPv6 ICE candidate: IPv6 transport disabled");
+        return PEER_ERR_NONE;
+    }
+
 
     esp_peer_msg_t msg = {
         .type = ESP_PEER_MSG_TYPE_CANDIDATE,

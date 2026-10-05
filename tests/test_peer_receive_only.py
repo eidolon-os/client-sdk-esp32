@@ -34,10 +34,10 @@ typedef struct { int codec,width,height,fps; } video_info_t;
 typedef struct { esp_peer_media_dir_t audio_dir,video_dir; esp_peer_audio_stream_info_t audio_info; video_info_t video_info; } media_t;
 typedef struct { peer_role_t role; void *on_state_changed,*on_sdp,*ctx,*server_list; media_t *media; int server_count; bool force_relay,enable_data_channel; } peer_options_t;
 typedef void *peer_handle_t;
-typedef struct { peer_options_t options; int ice_role,state; void *connection,*wait_event; uint16_t reliable_stream_id,lossy_stream_id; bool tcp_support; } peer_t;
+typedef struct { peer_options_t options; int ice_role,state; void *connection,*wait_event; uint16_t reliable_stream_id,lossy_stream_id; bool tcp_support,ipv6_support; } peer_t;
 typedef int peer_err_t;
 enum { PEER_ERR_NONE, PEER_ERR_INVALID_ARG, PEER_ERR_NO_MEM, PEER_ERR_RTC };
-typedef struct { struct { int cache_timeout,send_cache_size,recv_cache_size; } data_ch_cfg; bool tcp_support; } esp_peer_default_cfg_t;
+typedef struct { struct { int cache_timeout,send_cache_size,recv_cache_size; } data_ch_cfg; bool tcp_support,ipv6_support; } esp_peer_default_cfg_t;
 typedef struct { void *server_lists; int server_num,ice_trans_policy; esp_peer_media_dir_t audio_dir,video_dir; esp_peer_audio_stream_info_t audio_info; video_info_t video_info; bool enable_data_channel,manual_ch_create,no_auto_reconnect; void *extra_cfg; int extra_size; void *on_state,*on_msg,*on_video_info,*on_audio_info,*on_video_data,*on_audio_data,*on_channel_open,*on_channel_close,*on_data,*ctx; int role; } esp_peer_cfg_t;
 static esp_peer_cfg_t received;
 static void media_lib_event_group_create(void **handle) { *handle=(void*)1; }
