@@ -15,6 +15,7 @@
  */
 
 #include <stdlib.h>
+#include <stdatomic.h>
 #include "esp_log.h"
 #include "esp_peer.h"
 #include "esp_peer_default.h"
@@ -46,7 +47,7 @@ typedef struct {
     bool tcp_support;
     bool ipv6_support;
 
-    bool running;
+    atomic_bool running;
     bool pause;
     media_lib_event_grp_handle_t wait_event;
 
@@ -368,9 +369,8 @@ peer_err_t peer_destroy(peer_handle_t handle)
         return PEER_ERR_INVALID_ARG;
     }
     peer_t *peer = (peer_t *)handle;
-    if (peer && peer->wait_event) {
-        media_lib_event_group_destroy(peer->wait_event);
-    }
+    // Destruction owns shutdown too, including failed connection attempts.
+    peer_disconnect(handle);
     free(peer);
     return PEER_ERR_NONE;
 }
@@ -390,6 +390,7 @@ peer_err_t peer_connect(peer_handle_t handle)
     const char* thread_name = peer->options.role == PEER_ROLE_SUBSCRIBER ?
         "lk_peer_sub" : "lk_peer_pub";
     if (media_lib_thread_create_from_scheduler(&thread, thread_name, peer_task, peer) != ESP_PEER_ERR_NONE) {
+        peer->running = false;
         ESP_LOGE(TAG(peer), "Failed to create thread");
         return PEER_ERR_RTC;
     }
@@ -408,18 +409,16 @@ peer_err_t peer_disconnect(peer_handle_t handle)
     }
     peer_t *peer = (peer_t *)handle;
 
+    // Join the loop before closing its native connection. The default peer
+    // implementation has no internal worker: the caller owns this loop.
+    bool was_running = atomic_exchange(&peer->running, false);
+    if (peer->pause && was_running) {
+        media_lib_event_group_set_bits(peer->wait_event, PC_RESUME_BIT);
+    }
+    if (was_running) {
+        media_lib_event_group_wait_bits(peer->wait_event, PC_EXIT_BIT, MEDIA_LIB_MAX_LOCK_TIME);
+    }
     if (peer->connection != NULL) {
-        esp_peer_disconnect(peer->connection);
-        bool still_running = peer->running;
-        if (peer->pause) {
-            peer->pause = false;
-            media_lib_event_group_set_bits(peer->wait_event, PC_RESUME_BIT);
-        }
-        peer->running = false;
-        if (still_running) {
-            media_lib_event_group_wait_bits(peer->wait_event, PC_EXIT_BIT, MEDIA_LIB_MAX_LOCK_TIME);
-            media_lib_event_group_clr_bits(peer->wait_event, PC_EXIT_BIT);
-        }
         esp_peer_close(peer->connection);
         peer->connection = NULL;
     }

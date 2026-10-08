@@ -91,6 +91,7 @@ static bool handle_state(engine_t *e,engine_event_t *ev,int state) {
 static void event_free(engine_event_t *ev) {}
 static bool map_engine_state(engine_t *e,int *out) { return false; }
 static void flush_event_queue(engine_t *e) {}
+static void cleanup_previous_connection(engine_t *e) { assert(order==2); }
 static void xSemaphoreGive(int sem) {}
 static void vTaskDelete(void *task) {}
 '''

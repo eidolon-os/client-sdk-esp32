@@ -22,6 +22,7 @@
 #include "esp_capture_sink.h"
 #include <inttypes.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include "esp_log.h"
 #include "url.h"
 #include "signaling.h"
@@ -33,8 +34,7 @@
 // MARK: - Constants
 static const char* TAG = "livekit_engine";
 
-/// Maximum time `engine_destroy` waits for the engine task to exit before
-/// forcibly deleting it.
+/// Maximum join time per destruction attempt; timeout retains ownership.
 #define ENGINE_TASK_JOIN_TIMEOUT_MS 5000
 
 // MARK: - Type definitions
@@ -130,7 +130,7 @@ typedef struct {
     SemaphoreHandle_t task_done_sem;
     QueueHandle_t event_queue;
     TimerHandle_t timer;
-    bool is_running;
+    atomic_bool is_running;
     uint16_t retry_count;
     livekit_failure_reason_t failure_reason;
 } engine_t;
@@ -1121,6 +1121,10 @@ static void engine_task(void *arg)
             ESP_LOGE(TAG, "Failed to receive event");
             continue;
         }
+        if (!eng->is_running) {
+            event_free(&ev);
+            break;
+        }
         // Internal events are not allowed to be enqueued.
         assert(ev.type != _EV_STATE_ENTER && ev.type != _EV_STATE_EXIT);
         ESP_LOGD(TAG, "Event: type=%d", ev.type);
@@ -1155,6 +1159,10 @@ static void engine_task(void *arg)
             }
         }
     }
+
+    // The engine remains the sole owner of transport cleanup. Signal completion
+    // only after every peer loop and the signalling transport have stopped.
+    cleanup_previous_connection(eng);
 
     // Discard any remaining events in the queue before exiting.
     flush_event_queue(eng);
@@ -1288,10 +1296,10 @@ engine_err_t engine_destroy(engine_handle_t handle)
 
         // Join the task rather than deleting it here: the task self-deletes via
         // vTaskDelete(NULL), so deleting `task_handle` could act on a stale handle
-        // and crash. Only force deletion if the task fails to exit in time.
+        // and crash. A pending close retains all resources for a later join.
         if (xSemaphoreTake(eng->task_done_sem, pdMS_TO_TICKS(ENGINE_TASK_JOIN_TIMEOUT_MS)) != pdTRUE) {
-            ESP_LOGW(TAG, "Engine task did not exit in time; forcing deletion");
-            vTaskDelete(eng->task_handle);
+            ESP_LOGW(TAG, "Engine shutdown pending; retaining room for retry");
+            return ENGINE_ERR_OTHER;
         }
         eng->task_handle = NULL;
     }

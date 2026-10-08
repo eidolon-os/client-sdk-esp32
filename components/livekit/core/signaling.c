@@ -35,7 +35,6 @@ static const char *TAG = "livekit_signaling";
 #define SIGNAL_WS_RECONNECT_TIMEOUT_MS 1000
 #define SIGNAL_WS_NETWORK_TIMEOUT_MS   10000
 #define SIGNAL_WS_CLOSE_CODE           1000
-#define SIGNAL_WS_CLOSE_TIMEOUT_MS     250
 
 typedef struct {
     esp_websocket_client_handle_t ws;
@@ -87,7 +86,7 @@ static signal_err_t send_request(signal_t *sg, livekit_pb_signal_request_t *requ
         if (esp_websocket_client_send_bin(sg->ws,
                 (const char *)enc_buf,
                 (int)encoded_size,
-                portMAX_DELAY) < 0) {
+                pdMS_TO_TICKS(SIGNAL_WS_NETWORK_TIMEOUT_MS)) < 0) {
             //ESP_LOGE(TAG, "Failed to send request");
             ret = SIGNAL_ERR_MESSAGE;
             break;
@@ -351,10 +350,10 @@ signal_err_t signal_close(signal_handle_t handle)
         return SIGNAL_ERR_INVALID_ARG;
     }
     signal_t *sg = (signal_t *)handle;
-    if (esp_websocket_client_is_connected(sg->ws) &&
-        esp_websocket_client_close(sg->ws, pdMS_TO_TICKS(SIGNAL_WS_CLOSE_TIMEOUT_MS)) != ESP_OK) {
-        return SIGNAL_ERR_WEBSOCKET;
-    }
+    // Leave is best-effort at the protocol layer. Local teardown must not wait
+    // for a remote close handshake, including a half-open or connecting socket.
+    // stop joins the existing WebSocket task; its I/O uses network_timeout_ms.
+    esp_websocket_client_stop(sg->ws);
     return SIGNAL_ERR_NONE;
 }
 

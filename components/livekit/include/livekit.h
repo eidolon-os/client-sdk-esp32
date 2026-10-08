@@ -256,6 +256,8 @@ typedef void *livekit_room_handle_t;
 livekit_err_t livekit_room_create(livekit_room_handle_t *handle, const livekit_room_options_t *options);
 
 /// Destroys a room.
+/// If destruction returns an error, the handle remains owned by the caller.
+/// Retry destruction before releasing callback/media context or replacing the room.
 /// @param handle[in] Room handle.
 /// @warning For normal connection closure, disconnect the room first using
 ///          @ref livekit_room_close before destroying the room.

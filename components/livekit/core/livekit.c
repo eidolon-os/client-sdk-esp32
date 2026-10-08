@@ -289,7 +289,9 @@ livekit_err_t livekit_room_destroy(livekit_room_handle_t handle)
         return LIVEKIT_ERR_INVALID_ARG;
     }
     livekit_room_close(handle);
-    engine_destroy(room->engine);
+    if (engine_destroy(room->engine) != ENGINE_ERR_NONE) {
+        return LIVEKIT_ERR_ENGINE; // Still owns the engine and callback context.
+    }
     rpc_manager_destroy(room->rpc_manager);
     data_stream_reader_destroy(room->data_stream_reader);
     data_stream_writer_destroy(room->data_stream_writer);
