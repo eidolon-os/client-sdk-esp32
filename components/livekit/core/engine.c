@@ -859,6 +859,31 @@ static bool handle_state_disconnected(engine_t *eng, const engine_event_t *ev)
     return false;
 }
 
+// SDP processing and signalling failures are terminal for this attempt. Keep
+// recovery in the engine's existing backoff owner; do not leave a failed
+// negotiation looking connected until the remote negotiation timer expires.
+static void handle_remote_sdp(engine_t *eng, peer_role_t role, const char *sdp)
+{
+    peer_handle_t peer = role == PEER_ROLE_PUBLISHER ? eng->pub_peer_handle : eng->sub_peer_handle;
+    const peer_err_t err = peer_handle_sdp(peer, sdp);
+    if (err != PEER_ERR_NONE) {
+        ESP_LOGE(TAG, "Remote SDP failed role=%d err=%d", role, err);
+        eng->failure_reason = LIVEKIT_FAILURE_REASON_RTC;
+        eng->state = ENGINE_STATE_BACKOFF;
+    }
+}
+
+static void send_local_sdp(engine_t *eng, peer_role_t role, const char *sdp)
+{
+    const signal_err_t err = role == PEER_ROLE_PUBLISHER ?
+        signal_send_offer(eng->signal_handle, sdp) : signal_send_answer(eng->signal_handle, sdp);
+    if (err != SIGNAL_ERR_NONE) {
+        ESP_LOGE(TAG, "Local SDP send failed role=%d err=%d", role, err);
+        eng->failure_reason = LIVEKIT_FAILURE_REASON_SIGNAL_CLOSE;
+        eng->state = ENGINE_STATE_BACKOFF;
+    }
+}
+
 // MARK: - State: Connecting
 
 /// Handler for `ENGINE_STATE_CONNECTING`.
@@ -899,11 +924,11 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
-                    peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
+                    handle_remote_sdp(eng, PEER_ROLE_PUBLISHER, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
-                    peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
+                    handle_remote_sdp(eng, PEER_ROLE_SUBSCRIBER, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
                     const livekit_pb_trickle_request_t *trickle = &res->message.trickle;
@@ -949,11 +974,7 @@ static bool handle_state_connecting(engine_t *eng, const engine_event_t *ev)
         case EV_PEER_SDP:
             const char *sdp = ev->detail.peer_sdp.sdp;
             peer_role_t sdp_role = ev->detail.peer_sdp.role;
-            if (sdp_role == PEER_ROLE_PUBLISHER) {
-                signal_send_offer(eng->signal_handle, sdp);
-            } else {
-                signal_send_answer(eng->signal_handle, sdp);
-            }
+            send_local_sdp(eng, sdp_role, sdp);
             break;
         default:
             break;
@@ -997,11 +1018,11 @@ static bool handle_state_connected(engine_t *eng, const engine_event_t *ev)
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_ANSWER_TAG:
                     const livekit_pb_session_description_t *answer = &res->message.answer;
-                    peer_handle_sdp(eng->pub_peer_handle, answer->sdp);
+                    handle_remote_sdp(eng, PEER_ROLE_PUBLISHER, answer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_OFFER_TAG:
                     const livekit_pb_session_description_t *offer = &res->message.offer;
-                    peer_handle_sdp(eng->sub_peer_handle, offer->sdp);
+                    handle_remote_sdp(eng, PEER_ROLE_SUBSCRIBER, offer->sdp);
                     break;
                 case LIVEKIT_PB_SIGNAL_RESPONSE_TRICKLE_TAG:
                     const livekit_pb_trickle_request_t *trickle = &res->message.trickle;
@@ -1043,7 +1064,7 @@ static bool handle_state_connected(engine_t *eng, const engine_event_t *ev)
                 ESP_LOGW(TAG, "Unexpected SDP from publisher");
                 break;
             }
-            signal_send_answer(eng->signal_handle, sdp);
+            send_local_sdp(eng, sdp_role, sdp);
             break;
         default:
             break;
