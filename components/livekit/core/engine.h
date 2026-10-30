@@ -66,6 +66,9 @@ engine_err_t engine_destroy(engine_handle_t handle);
 /// Connect the engine.
 engine_err_t engine_connect(engine_handle_t handle, const char* server_url, const char* token);
 
+/// Queue a same-channel credential renewal, conditional on the previous token.
+engine_err_t engine_update_token(engine_handle_t handle, const char *expected, const char *token);
+
 /// Close the engine.
 engine_err_t engine_close(engine_handle_t handle);
 

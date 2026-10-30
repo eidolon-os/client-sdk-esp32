@@ -296,6 +296,15 @@ livekit_err_t livekit_room_destroy(livekit_room_handle_t handle);
 ///
 livekit_err_t livekit_room_connect(livekit_room_handle_t handle, const char *server_url, const char *token);
 
+/// Queue renewed credentials for future reconnects without interrupting media.
+/// The caller must obtain the token from its trusted authority for the same
+/// identity, room and permissions. This does not change active permissions.
+/// expected_token identifies the credential being replaced; a superseded update
+/// is ignored. Success means queued, not that a new connection was authorized.
+/// Calls for one room must be ordered by the caller. No token is logged.
+livekit_err_t livekit_room_update_token(livekit_room_handle_t handle,
+                                      const char *expected_token, const char *token);
+
 /// Disconnects from a room asynchronously.
 ///
 /// @param handle[in] Room handle.

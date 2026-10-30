@@ -313,6 +313,17 @@ livekit_err_t livekit_room_connect(livekit_room_handle_t handle, const char *ser
     return LIVEKIT_ERR_NONE;
 }
 
+livekit_err_t livekit_room_update_token(livekit_room_handle_t handle,
+                                      const char *expected_token, const char *token)
+{
+    if (handle == NULL || expected_token == NULL || token == NULL || !expected_token[0] || !token[0]) {
+        return LIVEKIT_ERR_INVALID_ARG;
+    }
+    livekit_room_t *room = (livekit_room_t *)handle;
+    return engine_update_token(room->engine, expected_token, token) == ENGINE_ERR_NONE
+        ? LIVEKIT_ERR_NONE : LIVEKIT_ERR_OTHER;
+}
+
 livekit_err_t livekit_room_close(livekit_room_handle_t handle)
 {
     if (handle == NULL) {

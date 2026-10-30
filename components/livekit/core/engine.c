@@ -50,6 +50,7 @@ typedef enum {
 /// Type of event processed by the engine state machine.
 typedef enum {
     EV_CMD_CONNECT,         /// User-initiated connect.
+    EV_CMD_UPDATE_TOKEN,    /// Renew credentials without restarting media.
     EV_CMD_CLOSE,           /// User-initiated disconnect.
     EV_SIG_STATE,           /// Signal state changed.
     EV_SIG_RES,             /// Signal response received.
@@ -72,6 +73,8 @@ typedef struct {
             char *server_url;
             char *token;
         } cmd_connect;
+
+        struct { char *expected; char *token; } cmd_update_token;
 
         /// Detail for `EV_SIG_RES`.
         livekit_pb_signal_response_t res;
@@ -685,6 +688,10 @@ static void event_free(engine_event_t *ev)
             SAFE_FREE(ev->detail.cmd_connect.server_url);
             SAFE_FREE(ev->detail.cmd_connect.token);
             break;
+        case EV_CMD_UPDATE_TOKEN:
+            SAFE_FREE(ev->detail.cmd_update_token.expected);
+            SAFE_FREE(ev->detail.cmd_update_token.token);
+            break;
         case EV_SIG_RES:
             protocol_signal_response_free(&ev->detail.res);
             break;
@@ -1119,9 +1126,26 @@ static bool handle_state_backoff(engine_t *eng, const engine_event_t *ev)
     return false;
 }
 
+// Serialized with connect/close/retry by the existing engine task. A delayed
+// renewal from an earlier connection must not overwrite a replacement token.
+static bool handle_token_update(engine_t *eng, engine_event_t *ev)
+{
+    if (eng->token == NULL || strcmp(eng->token, ev->detail.cmd_update_token.expected) != 0) {
+        ESP_LOGW(TAG, "Ignoring superseded credential update");
+        return false;
+    }
+    SAFE_FREE(eng->token);
+    eng->token = ev->detail.cmd_update_token.token;
+    ev->detail.cmd_update_token.token = NULL;
+    // No state transition: closed stays closed; backoff keeps its timer;
+    // an established connection keeps its existing media and permissions.
+    return false; // event_free releases the expected token.
+}
+
 /// Invokes the handler for the given state.
 static inline bool handle_state(engine_t *eng, engine_event_t *ev, engine_state_t state)
 {
+    if (ev->type == EV_CMD_UPDATE_TOKEN) return handle_token_update(eng, ev);
     switch (state) {
         case ENGINE_STATE_DISCONNECTED: return handle_state_disconnected(eng, ev);
         case ENGINE_STATE_CONNECTING:   return handle_state_connecting(eng, ev);
@@ -1371,6 +1395,27 @@ engine_err_t engine_connect(engine_handle_t handle, const char* server_url, cons
         .detail.cmd_connect = { .server_url = strdup(server_url), .token = strdup(token) }
     };
     if (!event_enqueue(eng, &ev, true)) {
+        event_free(&ev);
+        return ENGINE_ERR_OTHER;
+    }
+    return ENGINE_ERR_NONE;
+}
+
+engine_err_t engine_update_token(engine_handle_t handle, const char *expected, const char *token)
+{
+    if (handle == NULL || expected == NULL || token == NULL || !expected[0] || !token[0]) {
+        return ENGINE_ERR_INVALID_ARG;
+    }
+    engine_t *eng = (engine_t *)handle;
+    engine_event_t ev = { .type = EV_CMD_UPDATE_TOKEN };
+    ev.detail.cmd_update_token.expected = strdup(expected);
+    ev.detail.cmd_update_token.token = strdup(token);
+    if (ev.detail.cmd_update_token.expected == NULL || ev.detail.cmd_update_token.token == NULL) {
+        event_free(&ev);
+        return ENGINE_ERR_NO_MEM;
+    }
+    // FIFO preserves successive renewals. Close/revocation retains its priority.
+    if (!event_enqueue(eng, &ev, false)) {
         event_free(&ev);
         return ENGINE_ERR_OTHER;
     }
